@@ -364,6 +364,14 @@ git commit -m "feat: add GPAF structural call roles"
 
 ## Task 6: Experiment gates, presets and documentation
 
+Status: partial. Presets `gpaf-shadow-v1`, `gpaf-retrieval-v1` and
+`gpaf-structural-call-v1` are implemented on top of `upgrade-v1`, using the
+current 10M evidence that momentum is the strongest base and adaptive
+beam/refinement is not yet the right default. The follow-up research gate is
+documented in `research_results/gpaf_10m_followup_plan_20260701.md`. Corpus-runner
+model-byte split reporting and automatic shuffled/random-slot controls remain
+pending.
+
 **Files:**
 - Modify: `python/sbm_presets.py`
 - Modify: `scripts/run_corpus_training.py`
