@@ -92,7 +92,7 @@ StepStats SparseBranchMachine::step(std::uint32_t token,
     }
     maybe_begin_topology_probe(learn);
     const auto signatures = make_signatures(history_, learn);
-    auto [active, examined] = select_route(signatures);
+    auto [active, examined] = select_route(signatures, 2, learn);
 
     // Prediction and all metrics are fixed before the target can modify any
     // node, including newly allocated address residents.

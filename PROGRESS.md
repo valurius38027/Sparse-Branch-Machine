@@ -8,19 +8,17 @@
 持续进行正式的工程推进，保持和计划文件同步，饱和式推进，保持连贯性。
 基础设施充分时避免保守增量，允许临时粗糙边缘，但最终状态必须经过验证。
 
-当前重点：在 `adaptive-computation-upgrade` 分支上执行升级实验方案，已完成 U2.1/U1.1/U1.2 并验证 10M 效果。
+当前新增架构方向：下一代 **Global Predictive Address Field (GPAF)** 已开始实施。当前完成的是工程安全的前置层：路由来源/token-signature 依赖诊断、不改变预测的 shadow-only GPAF role-key 观测、默认关闭的有界 GPAF candidate retrieval、frozen evaluation 的 GPAF read-only 保护，以及 Probe-only slot phase 统计/持久化。Active admission、retirement/quarantine transitions、structural-call routing 和实验准入尚未实现。
 
 ## Branch state
 
-- **Branch:** `adaptive-computation-upgrade` (created from `theory-alignment-v9`)
-- **Status:** ahead of origin, uncommitted changes from baselines/ remain untracked
-- **Last commits:**
-  - `bfc0af3` research: 10M validation and presets for upgrade-v1
-  - `6a89d21` fix: Adam bias correction for sparse decision momentum
-  - `3e9b661` feat: config presets with r3-baseline and upgrade-v1
-  - `59c1955` feat: iterative routing refinement with expanded neighbor radius
-  - `81abd27` feat: adaptive beam width with confidence-based truncation
-  - `8094de0` feat: per-entry Adam-like momentum for sparse decision logits
+- **Branch:** `work`
+- **Status:** contains post-upgrade commits plus GPAF diagnostics/shadow implementation and bounded retrieval work
+- **Current documentation additions:**
+  - Spec: `docs/superpowers/specs/2026-06-30-global-predictive-address-field-design.md`
+  - Plan: `docs/superpowers/plans/2026-06-30-global-predictive-address-field.md`
+  - Architecture note: `DESIGN_NOTES.md` next-generation GPAF section
+  - Implemented: route-source score diagnostics, shadow-only GPAF role-key counters, bounded GPAF candidate retrieval, frozen read-only GPAF retrieval, Probe-only GPAF slot phase diagnostics and same-format checkpoint persistence
 
 ## Completed: Adaptive Computation Upgrade (plan `2026-06-30-adaptive-computation-upgrade.md`)
 
@@ -47,12 +45,12 @@ Key finding: **momentum with bias correction improves NLL by 0.111 nats/token**,
 
 Full report: `research_results/adaptive_computation_upgrade_10m_20260630.md`
 
-## Next: 100M Heterogeneous Stream (R3) with upgrade-v1
+## Next work queue
 
-**Plan:** `docs/superpowers/plans/2026-06-28-r3-100m-heterogeneous-stream.md`
+1. Finish or explicitly supersede the active R3 100M heterogeneous stream gate: `docs/superpowers/plans/2026-06-28-r3-100m-heterogeneous-stream.md`.
+2. Continue GPAF from `docs/superpowers/plans/2026-06-30-global-predictive-address-field.md`: next pending work is Active admission plus quarantine/recoverable-retirement transitions and frozen ablation; bounded retrieval is implemented but still experimental and disabled by default.
+3. Do not claim language semantics from GPAF unless real-data provenance, frozen validation, multi-seed stability, shard transfer and strong controls pass.
 
-Use the proven `upgrade-v1` preset on the 100M FineWeb-Edu stream gate. Requires manifest construction first.
+## Open theoretical gates
 
-## Open Theoretical Gates
-
-Same as before, with momentum validated on 10M and transfer to 100M pending.
+GPAF is intended to create room for global sparse retrieval to emerge from predictive role reuse. It does not by itself solve content-conditioned variable binding, relation-following, task-comparable topology value, long-horizon credit or stable cross-domain language structure.

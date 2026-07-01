@@ -104,6 +104,25 @@ int main() {
            std::string_view::npos);
     assert(token_view.find("\"structural_execution_cost\"") !=
            std::string_view::npos);
+    assert(token_view.find("\"candidate_source_exact_bucket\"") !=
+           std::string_view::npos);
+    assert(token_view.find("\"candidate_source_control_edge\"") !=
+           std::string_view::npos);
+    assert(token_view.find("\"candidate_source_neighbor_bucket\"") !=
+           std::string_view::npos);
+    assert(token_view.find("\"route_score_hamming_sum\"") !=
+           std::string_view::npos);
+    assert(token_view.find("\"route_score_exact_sum\"") !=
+           std::string_view::npos);
+    assert(token_view.find("\"route_score_edge_prior_sum\"") !=
+           std::string_view::npos);
+    assert(token_view.find("\"gpaf_probe_slots\"") != std::string_view::npos);
+    assert(token_view.find("\"gpaf_active_slots\"") != std::string_view::npos);
+    assert(token_view.find("\"gpaf_quarantined_slots\"") != std::string_view::npos);
+    assert(token_view.find("\"gpaf_recoverable_retired_slots\"") !=
+           std::string_view::npos);
+    assert(token_view.find("\"gpaf_physically_erased_slots\"") !=
+           std::string_view::npos);
     sbm_string_free(token_result);
 
     sbm_config_handle* machine_config = sbm_config_create();
@@ -182,6 +201,12 @@ int main() {
     assert(std::string_view(machine_diag).find("\"dependency_blocked_channels\"") !=
            std::string_view::npos);
     assert(std::string_view(machine_diag).find("\"topology_restored\"") !=
+           std::string_view::npos);
+    assert(std::string_view(machine_diag).find("\"candidate_source_exact_bucket\"") !=
+           std::string_view::npos);
+    assert(std::string_view(machine_diag).find("\"route_score_hamming_sum\"") !=
+           std::string_view::npos);
+    assert(std::string_view(machine_diag).find("\"gpaf_probe_slots\"") !=
            std::string_view::npos);
     sbm_string_free(machine_diag);
     char* machine_summary = sbm_machine_summary_json(resumed);
