@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <iostream>
 #include <string>
@@ -505,6 +506,182 @@ void verify_dependency_attribution_json() {
     assert(result.diagnostics.structural_execution_cost >= 0.0);
 }
 
+void verify_gpaf_shadow_observation_is_read_only() {
+    auto baseline_config = sparse_config(4U, 16U);
+    baseline_config.adaptive_topology = false;
+    baseline_config.decode_token_ranking_during_training = true;
+    auto shadow_config = baseline_config;
+    shadow_config.gpaf_shadow_observation = true;
+    shadow_config.gpaf_slots = 128U;
+
+    sbm::SparseBranchMachine baseline(baseline_config);
+    sbm::SparseBranchMachine shadow(shadow_config);
+    for (std::uint32_t step = 0U; step < 256U; ++step) {
+        const std::uint32_t token = step % 16U;
+        const std::uint32_t target = (step * 5U + 3U) % 16U;
+        const auto baseline_stats = baseline.step_token(token, target, true);
+        const auto shadow_stats = shadow.step_token(token, target, true);
+        assert(baseline_stats.predicted_token == shadow_stats.predicted_token);
+        assert(baseline_stats.active_nodes == shadow_stats.active_nodes);
+        assert(baseline_stats.candidates_examined ==
+               shadow_stats.candidates_examined);
+    }
+
+    const auto baseline_diag = baseline.diagnostics();
+    const auto shadow_diag = shadow.diagnostics();
+    assert(baseline_diag.gpaf_role_observations == 0U);
+    assert(baseline_diag.gpaf_slots_allocated == 0U);
+    assert(shadow_diag.gpaf_role_observations > 0U);
+    assert(shadow_diag.gpaf_unique_role_keys > 0U);
+    assert(shadow_diag.gpaf_slots_allocated > 0U);
+    assert(shadow_diag.gpaf_slots_probed == 0U);
+    assert(shadow_diag.gpaf_candidates_returned == 0U);
+    assert(shadow_diag.avg_active == baseline_diag.avg_active);
+    assert(shadow_diag.avg_candidates == baseline_diag.avg_candidates);
+}
+
+void verify_gpaf_candidate_retrieval_is_bounded() {
+    auto config = sparse_config(4U, 16U);
+    config.adaptive_topology = false;
+    config.gpaf_shadow_observation = true;
+    config.gpaf_candidate_retrieval = true;
+    config.gpaf_query_keys_per_step = 2U;
+    config.gpaf_slots = 64U;
+    config.gpaf_residents_per_slot = 3U;
+    sbm::SparseBranchMachine machine(config);
+
+    for (std::uint32_t step = 0U; step < 512U; ++step) {
+        const std::uint32_t token = step % 16U;
+        const std::uint32_t target = (step * 7U + 5U) % 16U;
+        (void)machine.step_token(token, target, true);
+    }
+
+    const auto diagnostics = machine.diagnostics();
+    assert(diagnostics.gpaf_role_observations > 0U);
+    assert(diagnostics.gpaf_slots_probed > 0U);
+    assert(diagnostics.gpaf_candidates_returned > 0U);
+    assert(diagnostics.gpaf_slots_probed <=
+           diagnostics.steps * config.gpaf_query_keys_per_step);
+    assert(diagnostics.gpaf_candidates_returned <=
+           diagnostics.gpaf_slots_probed * config.gpaf_residents_per_slot);
+    assert(diagnostics.avg_active <= static_cast<double>(config.beam_width));
+}
+
+void verify_gpaf_checkpoint_resume_preserves_retrieval_state() {
+    auto config = sparse_config(4U, 16U);
+    config.adaptive_topology = false;
+    config.gpaf_shadow_observation = true;
+    config.gpaf_candidate_retrieval = true;
+    config.gpaf_query_keys_per_step = 2U;
+    config.gpaf_slots = 64U;
+    config.gpaf_residents_per_slot = 3U;
+    sbm::SparseBranchMachine machine(config);
+
+    for (std::uint32_t step = 0U; step < 256U; ++step) {
+        const std::uint32_t token = step % 16U;
+        const std::uint32_t target = (step * 7U + 5U) % 16U;
+        (void)machine.step_token(token, target, true);
+    }
+    const auto before = machine.diagnostics();
+    assert(before.gpaf_slots_probed > 0U);
+    assert(before.gpaf_candidates_returned > 0U);
+
+    const std::string path = "gpaf_checkpoint_resume_test.sbm";
+    sbm::save_checkpoint(machine, path);
+    auto resumed = sbm::load_checkpoint(path);
+    (void)std::remove(path.c_str());
+
+    const auto loaded = resumed.diagnostics();
+    assert(resumed.config().gpaf_shadow_observation);
+    assert(resumed.config().gpaf_candidate_retrieval);
+    assert(resumed.config().gpaf_query_keys_per_step == config.gpaf_query_keys_per_step);
+    assert(resumed.config().gpaf_slots == config.gpaf_slots);
+    assert(resumed.config().gpaf_residents_per_slot == config.gpaf_residents_per_slot);
+    assert(loaded.gpaf_role_observations == before.gpaf_role_observations);
+    assert(loaded.gpaf_unique_role_keys == before.gpaf_unique_role_keys);
+    assert(loaded.gpaf_slots_allocated == before.gpaf_slots_allocated);
+    assert(loaded.gpaf_shadow_updates == before.gpaf_shadow_updates);
+    assert(loaded.gpaf_slots_probed == before.gpaf_slots_probed);
+    assert(loaded.gpaf_candidates_returned == before.gpaf_candidates_returned);
+
+    const auto next_machine = machine.step_token(3U, 10U, true);
+    const auto next_resumed = resumed.step_token(3U, 10U, true);
+    assert(next_machine.predicted_token == next_resumed.predicted_token);
+    assert(next_machine.active_nodes == next_resumed.active_nodes);
+    assert(next_machine.candidates_examined == next_resumed.candidates_examined);
+    assert(next_resumed.candidates_examined > 0U);
+    const auto after = resumed.diagnostics();
+    assert(after.gpaf_slots_probed > loaded.gpaf_slots_probed);
+    assert(after.gpaf_candidates_returned >= loaded.gpaf_candidates_returned);
+}
+
+void verify_gpaf_frozen_retrieval_is_read_only() {
+    auto config = sparse_config(4U, 16U);
+    config.adaptive_topology = false;
+    config.gpaf_shadow_observation = true;
+    config.gpaf_candidate_retrieval = true;
+    config.gpaf_query_keys_per_step = 2U;
+    config.gpaf_slots = 64U;
+    config.gpaf_residents_per_slot = 3U;
+    sbm::SparseBranchMachine machine(config);
+
+    for (std::uint32_t step = 0U; step < 256U; ++step) {
+        const std::uint32_t token = step % 16U;
+        const std::uint32_t target = (step * 7U + 5U) % 16U;
+        (void)machine.step_token(token, target, true);
+    }
+    const auto before = machine.diagnostics();
+    assert(before.gpaf_role_observations > 0U);
+    assert(before.gpaf_slots_probed > 0U);
+    assert(before.gpaf_candidates_returned > 0U);
+
+    const auto frozen = machine.step_token(3U, 10U, false);
+    assert(frozen.active_nodes > 0U);
+    const auto after = machine.diagnostics();
+    assert(after.gpaf_role_observations == before.gpaf_role_observations);
+    assert(after.gpaf_unique_role_keys == before.gpaf_unique_role_keys);
+    assert(after.gpaf_slots_allocated == before.gpaf_slots_allocated);
+    assert(after.gpaf_shadow_updates == before.gpaf_shadow_updates);
+    assert(after.gpaf_slots_probed == before.gpaf_slots_probed);
+    assert(after.gpaf_candidates_returned == before.gpaf_candidates_returned);
+}
+
+void verify_gpaf_probe_slot_phase_diagnostics_resume() {
+    auto config = sparse_config(4U, 16U);
+    config.adaptive_topology = false;
+    config.gpaf_shadow_observation = true;
+    config.gpaf_candidate_retrieval = true;
+    config.gpaf_query_keys_per_step = 2U;
+    config.gpaf_slots = 64U;
+    config.gpaf_residents_per_slot = 3U;
+    sbm::SparseBranchMachine machine(config);
+
+    for (std::uint32_t step = 0U; step < 128U; ++step) {
+        const std::uint32_t token = step % 16U;
+        const std::uint32_t target = (step * 7U + 5U) % 16U;
+        (void)machine.step_token(token, target, true);
+    }
+    const auto before = machine.diagnostics();
+    assert(before.gpaf_unique_role_keys > 0U);
+    assert(before.gpaf_probe_slots == before.gpaf_unique_role_keys);
+    assert(before.gpaf_active_slots == 0U);
+    assert(before.gpaf_quarantined_slots == 0U);
+    assert(before.gpaf_recoverable_retired_slots == 0U);
+    assert(before.gpaf_physically_erased_slots == 0U);
+
+    const std::string path = "gpaf_probe_phase_resume_test.sbm";
+    sbm::save_checkpoint(machine, path);
+    auto resumed = sbm::load_checkpoint(path);
+    (void)std::remove(path.c_str());
+    const auto after = resumed.diagnostics();
+    assert(after.gpaf_probe_slots == before.gpaf_probe_slots);
+    assert(after.gpaf_active_slots == before.gpaf_active_slots);
+    assert(after.gpaf_quarantined_slots == before.gpaf_quarantined_slots);
+    assert(after.gpaf_recoverable_retired_slots ==
+           before.gpaf_recoverable_retired_slots);
+    assert(after.gpaf_physically_erased_slots == before.gpaf_physically_erased_slots);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -570,6 +747,31 @@ int main(int argc, char** argv) {
     if (mode == "dependency_attribution") {
         verify_dependency_attribution_json();
         std::cout << "dependency attribution passed\n";
+        return 0;
+    }
+    if (mode == "gpaf_shadow") {
+        verify_gpaf_shadow_observation_is_read_only();
+        std::cout << "GPAF shadow observation passed\n";
+        return 0;
+    }
+    if (mode == "gpaf_retrieval") {
+        verify_gpaf_candidate_retrieval_is_bounded();
+        std::cout << "GPAF candidate retrieval passed\n";
+        return 0;
+    }
+    if (mode == "gpaf_checkpoint") {
+        verify_gpaf_checkpoint_resume_preserves_retrieval_state();
+        std::cout << "GPAF checkpoint resume passed\n";
+        return 0;
+    }
+    if (mode == "gpaf_frozen") {
+        verify_gpaf_frozen_retrieval_is_read_only();
+        std::cout << "GPAF frozen retrieval read-only passed\n";
+        return 0;
+    }
+    if (mode == "gpaf_lifecycle") {
+        verify_gpaf_probe_slot_phase_diagnostics_resume();
+        std::cout << "GPAF lifecycle diagnostics passed\n";
         return 0;
     }
     const auto address_10 = address_bytes(10U);

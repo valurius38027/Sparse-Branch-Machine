@@ -264,6 +264,45 @@ void SparseBranchMachine::observe_binding_reuse(std::size_t channel,
     }
 }
 
+std::uint64_t SparseBranchMachine::gpaf_role_key_for_channel(
+    std::uint8_t channel_index) const noexcept {
+    if (channel_index >= topology_.size() || config_.gpaf_slots == 0U) return 0U;
+    const auto& channel = topology_[channel_index];
+    std::uint64_t key = mix64(
+        (static_cast<std::uint64_t>(channel.program.op) << 56U) ^
+        (static_cast<std::uint64_t>(channel.program.arity) << 48U) ^
+        (static_cast<std::uint64_t>(channel_index) << 40U) ^
+        (static_cast<std::uint64_t>(channel.dependency_edge_kind) << 32U) ^
+        (static_cast<std::uint64_t>(channel.parent_edge_kind) << 24U) ^
+        mix64(channel.generation + 0xD1B54A32D192ED03ULL));
+    key %= std::max<std::uint32_t>(1U, config_.gpaf_slots);
+    return key;
+}
+
+void SparseBranchMachine::observe_gpaf_shadow_roles(
+    std::span<const ScoredNode> active) {
+    if (!config_.gpaf_shadow_observation || config_.gpaf_slots == 0U) return;
+    for (const auto& node : active) {
+        if (node.channel >= topology_.size() || node.id == kInvalidNode) continue;
+        const std::uint64_t key = gpaf_role_key_for_channel(node.channel);
+        ++gpaf_role_observations_[key];
+        gpaf_slot_phases_.try_emplace(
+            key, static_cast<std::uint8_t>(GpafSlotPhase::Probe));
+        ++gpaf_role_observations_total_;
+        ++gpaf_shadow_updates_;
+        if (config_.gpaf_residents_per_slot == 0U) continue;
+        auto& residents = gpaf_residents_[key];
+        if (std::find(residents.begin(), residents.end(), node.id) != residents.end()) {
+            continue;
+        }
+        if (residents.size() < config_.gpaf_residents_per_slot) {
+            residents.push_back(node.id);
+            continue;
+        }
+        residents[total_steps_ % residents.size()] = node.id;
+    }
+}
+
 SparseBranchMachine::BindingReuseSummary SparseBranchMachine::binding_reuse_summary(
     std::size_t channel) const noexcept {
     BindingReuseSummary result;

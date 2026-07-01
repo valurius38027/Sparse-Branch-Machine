@@ -375,6 +375,38 @@ Diagnostics SparseBranchMachine::diagnostics() const noexcept {
     result.residual_nodes = residual;
     result.stale_bucket_refs_skipped = stale_bucket_refs_skipped_;
     result.stale_edge_refs_skipped = stale_edge_refs_skipped_;
+    result.candidate_source_exact_bucket = candidate_source_exact_bucket_;
+    result.candidate_source_control_edge = candidate_source_control_edge_;
+    result.candidate_source_neighbor_bucket = candidate_source_neighbor_bucket_;
+    result.route_score_hamming_sum = route_score_hamming_sum_;
+    result.route_score_exact_sum = route_score_exact_sum_;
+    result.route_score_edge_prior_sum = route_score_edge_prior_sum_;
+    result.gpaf_role_observations = gpaf_role_observations_total_;
+    result.gpaf_unique_role_keys = gpaf_role_observations_.size();
+    result.gpaf_slots_allocated = gpaf_slot_phases_.size();
+    for (const auto& [key, phase] : gpaf_slot_phases_) {
+        (void)key;
+        switch (static_cast<GpafSlotPhase>(phase)) {
+        case GpafSlotPhase::Probe:
+            ++result.gpaf_probe_slots;
+            break;
+        case GpafSlotPhase::Active:
+            ++result.gpaf_active_slots;
+            break;
+        case GpafSlotPhase::Quarantined:
+            ++result.gpaf_quarantined_slots;
+            break;
+        case GpafSlotPhase::RecoverableRetired:
+            ++result.gpaf_recoverable_retired_slots;
+            break;
+        case GpafSlotPhase::PhysicallyErased:
+            ++result.gpaf_physically_erased_slots;
+            break;
+        }
+    }
+    result.gpaf_shadow_updates = gpaf_shadow_updates_;
+    result.gpaf_slots_probed = gpaf_slots_probed_;
+    result.gpaf_candidates_returned = gpaf_candidates_returned_;
     result.estimated_bytes = bytes;
     result.sparse_output_entries = sparse_entries;
     result.topology_proposals = topology_proposals_;

@@ -266,7 +266,7 @@ StepStats SparseBranchMachine::step_token_sparse(std::uint32_t token,
         }
     }
 
-    auto [active, examined] = select_route(signatures);
+    auto [active, examined] = select_route(signatures, 2, learn);
 
     // Iterative refinement: if responsibility is not concentrated, expand the
     // neighbor radius and re-select. All rounds complete before the target is
@@ -281,7 +281,7 @@ StepStats SparseBranchMachine::step_token_sparse(std::uint32_t token,
              max_responsibility < config_.refinement_confidence_threshold;
              ++round) {
             const std::int64_t radius = 2 + static_cast<std::int64_t>(round) + 1;
-            auto [refined, examined_refined] = select_route(signatures, radius);
+            auto [refined, examined_refined] = select_route(signatures, radius, learn);
             examined += examined_refined;
             active = refined;
             max_responsibility = 0.0F;
@@ -580,6 +580,7 @@ StepStats SparseBranchMachine::step_token_sparse(std::uint32_t token,
         contributions.push_back(node.contribution);
     }
 
+    if (learn) observe_gpaf_shadow_roles(active);
     if (learn) observe_global_output_path(token_path_scratch_);
 
     if (learn) {

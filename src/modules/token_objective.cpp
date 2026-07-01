@@ -139,7 +139,7 @@ StepStats SparseBranchMachine::step_token_dense(std::uint32_t token,
         }
     }
 
-    auto [active, examined] = select_route(signatures);
+    auto [active, examined] = select_route(signatures, 2, learn);
     aggregate(active, logit_buffer_);
     softmax(logit_buffer_, prediction_buffer_, config_.softmax_temperature);
 
@@ -219,6 +219,7 @@ StepStats SparseBranchMachine::step_token_dense(std::uint32_t token,
         route.push_back(node.id);
         contributions.push_back(node.contribution);
     }
+    if (learn) observe_gpaf_shadow_roles(active);
 
     if (learn) {
         apply_trace_credit(normalized_loss);

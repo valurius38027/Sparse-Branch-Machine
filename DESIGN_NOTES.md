@@ -214,6 +214,35 @@ topology event and preserves the channel generation. Rollback is therefore a
 tracked lifecycle transition of the same address-program instance, not an
 implicit re-proposal.
 
+
+## Next-generation global predictive addressing
+
+The next addressing direction is the Global Predictive Address Field (GPAF),
+defined in `docs/superpowers/specs/2026-06-30-global-predictive-address-field-design.md`.
+The purpose is to move global sparse retrieval away from token-ID or
+token-signature similarity and toward predictive-role reuse measured by
+held-out codelength. The diagnostics, shadow-observation, disabled-by-default
+bounded candidate retrieval, frozen read-only retrieval guard and Probe-only
+slot phase accounting are implemented; Active admission,
+quarantine/recoverable-retirement transitions, frozen ablation and
+structural-call routing remain pending.
+
+GPAF must not encode linguistic abstractions as prior labels. If language,
+syntax, semantics, binding or relation-like behavior appears, it must emerge
+from reusable predictive structures that survive frozen validation, ablation,
+reuse accounting and real-data controls. The mechanism may use generic role
+keys such as coarse output correction, binding-state kind, dependency/call kind,
+structural lineage, reuse count and execution-cost bucket. It may not use labels
+such as subject, object, entity, coreference or topic as supervision or routing
+rules.
+
+The current token-signature buckets, content-match/follow operators and learned
+control edges remain compatibility controls and bootstrap mechanisms. They are
+not the intended primary source of global sparse influence. Any GPAF
+implementation must keep per-token query count, returned residents, candidates
+inspected, active nodes and output work bounded, and must report the byte cost of
+the global address field separately.
+
 ## Real-corpus invariants
 
 The next phase is governed by `ROADMAP_REAL_DATA.md`. Any real-corpus implementation must preserve these design invariants:
