@@ -34,6 +34,9 @@ public:
                                       AcceptedChannelRetirement policy);
     [[nodiscard]] bool restore_channel(std::size_t channel);
     [[nodiscard]] std::size_t restore_dependency_closure(std::size_t channel);
+    [[nodiscard]] std::size_t quarantine_gpaf_slots();
+    [[nodiscard]] std::size_t recoverably_retire_gpaf_slots();
+    [[nodiscard]] std::size_t restore_gpaf_slots();
     [[nodiscard]] std::size_t prune(std::uint32_t min_visits = 8,
                                     float utility_threshold = -0.05F);
     [[nodiscard]] std::size_t merge_redundant(std::size_t max_merges = 64);
@@ -73,9 +76,24 @@ public:
     friend struct CheckpointAccess;
 
 private:
+    enum class CandidateSource : std::uint8_t {
+        ExactBucket,
+        ControlEdge,
+        NeighborBucket,
+        GpafRole,
+    };
+    enum class GpafSlotPhase : std::uint8_t {
+        Probe,
+        Active,
+        Quarantined,
+        RecoverableRetired,
+        PhysicallyErased,
+    };
     struct CandidateNode {
         NodeId id{kInvalidNode};
         float edge_prior{};
+        CandidateSource source{CandidateSource::ExactBucket};
+        std::uint64_t gpaf_key{UINT64_MAX};
     };
     struct ScoredNode {
         double score{};
@@ -84,6 +102,8 @@ private:
         float contribution{};
         bool exact_region{};
         std::uint8_t channel{};
+        CandidateSource source{CandidateSource::ExactBucket};
+        std::uint64_t gpaf_key{UINT64_MAX};
     };
     struct AddressChannelState {
         AddressProgram program{};
@@ -155,6 +175,11 @@ private:
     [[nodiscard]] std::span<const std::uint64_t> make_signatures(
         std::span<const std::uint32_t> window, bool learn);
     void observe_binding_reuse(std::size_t channel, std::uint64_t key);
+    void observe_gpaf_shadow_roles(std::span<const ScoredNode> active);
+    [[nodiscard]] std::uint64_t gpaf_role_key_for_channel(
+        std::uint8_t channel) const noexcept;
+    [[nodiscard]] std::uint64_t gpaf_structural_call_key_for_channel(
+        std::uint8_t channel) const noexcept;
     [[nodiscard]] BindingReuseSummary binding_reuse_summary(
         std::size_t channel) const noexcept;
     [[nodiscard]] double binding_reuse_bonus(
@@ -186,13 +211,15 @@ private:
     [[nodiscard]] std::size_t slot_of(NodeId id) const noexcept;
     [[nodiscard]] std::span<const CandidateNode> candidate_ids(
         std::span<const std::uint64_t> signatures,
-        std::int64_t max_radius = 2);
+        std::int64_t max_radius = 2,
+        bool update_gpaf_state = true);
     [[nodiscard]] double score(std::size_t slot,
                                std::span<const std::uint64_t> signatures,
                                float edge_prior) const noexcept;
     [[nodiscard]] std::pair<std::span<ScoredNode>, std::uint32_t>
         select_route(std::span<const std::uint64_t> signatures,
-                     std::int64_t max_radius = 2);
+                     std::int64_t max_radius = 2,
+                     bool update_gpaf_state = true);
     void assign_responsibilities(std::span<ScoredNode> active) const;
     void aggregate(std::span<const ScoredNode> active, std::span<float> output) const;
     void compute_counterfactual_contributions(std::span<ScoredNode> active,
@@ -209,7 +236,9 @@ private:
     void absorb_node(std::size_t survivor_slot, std::size_t victim_slot);
     void erase_slot(std::size_t slot);
     [[nodiscard]] bool push_candidate(std::vector<CandidateNode>& values, NodeId id,
-                                      float edge_prior) const noexcept;
+                                      float edge_prior,
+                                      CandidateSource source,
+                                      std::uint64_t gpaf_key = UINT64_MAX) const noexcept;
 
     Config config_;
     std::vector<AddressChannelState> topology_;
@@ -236,6 +265,11 @@ private:
     std::vector<std::uint8_t> hot_indexed_;
     std::vector<NodeId> parents_;
     std::vector<std::vector<BindingReuseRecord>> binding_reuse_;
+    std::unordered_map<std::uint64_t, std::uint64_t> gpaf_role_observations_;
+    std::unordered_map<std::uint64_t, std::uint64_t>
+        gpaf_structural_call_observations_;
+    std::unordered_map<std::uint64_t, std::uint8_t> gpaf_slot_phases_;
+    std::unordered_map<std::uint64_t, std::vector<NodeId>> gpaf_residents_;
     std::vector<float> output_vectors_;
     std::vector<std::vector<detail::SparseOutputEntry>> sparse_outputs_;
     std::vector<std::vector<SparseAdmissionCandidate>> sparse_admission_;
@@ -276,6 +310,22 @@ private:
     std::uint64_t total_created_{};
     std::uint64_t total_merged_{};
     std::uint64_t total_pruned_{};
+    std::uint64_t candidate_source_exact_bucket_{};
+    std::uint64_t candidate_source_control_edge_{};
+    std::uint64_t candidate_source_neighbor_bucket_{};
+    double route_score_hamming_sum_{};
+    double route_score_exact_sum_{};
+    double route_score_edge_prior_sum_{};
+    std::uint64_t gpaf_role_observations_total_{};
+    std::uint64_t gpaf_slot_promotions_{};
+    std::uint64_t gpaf_slot_quarantines_{};
+    std::uint64_t gpaf_slot_recoverable_retires_{};
+    std::uint64_t gpaf_slot_restores_{};
+    std::uint64_t gpaf_shadow_updates_{};
+    std::uint64_t gpaf_slots_probed_{};
+    std::uint64_t gpaf_candidates_returned_{};
+    std::uint64_t gpaf_structural_call_candidates_returned_{};
+    std::uint64_t gpaf_structural_call_blocked_{};
     mutable std::uint64_t stale_bucket_refs_skipped_{};
     mutable std::uint64_t stale_edge_refs_skipped_{};
     std::uint64_t max_bucket_candidates_inspected_{};

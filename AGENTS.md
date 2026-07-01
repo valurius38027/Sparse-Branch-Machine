@@ -119,6 +119,7 @@ followed exactly; flexible skills (patterns) are adapted.
 | `2026-06-24-remaining-p0-output-fixes.md` | Closed |
 | `2026-06-27-neuronal-address-semantics.md` | Complete (all 9 tasks) |
 | `2026-06-28-r3-100m-heterogeneous-stream.md` | **Active** — next to execute |
+| `2026-06-30-global-predictive-address-field.md` | Partial — diagnostics, shadow observation, bounded retrieval, frozen read-only guard, lifecycle transitions and frozen ablation diagnostics implemented; structural-call roles pending |
 
 ### Specs (`docs/superpowers/specs/`)
 
@@ -128,6 +129,7 @@ followed exactly; flexible skills (patterns) are adapted.
 | `2026-06-24-global-hierarchical-output-prior-design.md` | global-hierarchical-output-prior |
 | `2026-06-24-p1-capacity-and-cursor-design.md` | p1-capacity-and-cursor |
 | `2026-06-24-remaining-p0-output-fixes-design.md` | remaining-p0-output-fixes |
+| `2026-06-30-global-predictive-address-field-design.md` | global-predictive-address-field |
 
 ## Document priority
 

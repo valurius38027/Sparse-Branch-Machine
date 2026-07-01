@@ -12,7 +12,9 @@ namespace sbm {
 
 bool SparseBranchMachine::push_candidate(std::vector<CandidateNode>& values,
                                          NodeId id,
-                                         float edge_prior) const noexcept {
+                                         float edge_prior,
+                                         CandidateSource source,
+                                         std::uint64_t gpaf_key) const noexcept {
     if (!contains(id)) return false;
     const auto found = std::find_if(values.begin(), values.end(),
                                     [&](const CandidateNode& candidate) {
@@ -20,28 +22,54 @@ bool SparseBranchMachine::push_candidate(std::vector<CandidateNode>& values,
                                     });
     if (found != values.end()) {
         if (edge_prior > found->edge_prior) found->edge_prior = edge_prior;
+        if (source == CandidateSource::GpafRole) {
+            found->source = CandidateSource::GpafRole;
+            found->gpaf_key = gpaf_key;
+        }
         return false;
     }
-    values.push_back({id, edge_prior});
+    values.push_back({id, edge_prior, source, gpaf_key});
     return true;
 }
 
 std::span<const SparseBranchMachine::CandidateNode>
 SparseBranchMachine::candidate_ids(std::span<const std::uint64_t> signatures,
-                                   std::int64_t max_radius) {
+                                   std::int64_t max_radius,
+                                   bool update_gpaf_state) {
     const std::size_t channel_count = topology_.size();
     const std::size_t exact_budget = channel_count * config_.bucket_scan_limit;
-    const std::size_t hard_limit = exact_budget +
+    const std::size_t edge_budget =
         static_cast<std::size_t>(config_.beam_width) * config_.edge_scan_limit;
+    const std::size_t gpaf_budget = config_.gpaf_candidate_retrieval
+        ? static_cast<std::size_t>(config_.gpaf_query_keys_per_step) *
+              config_.gpaf_residents_per_slot
+        : 0U;
+    const std::size_t hard_limit = exact_budget + edge_budget + gpaf_budget;
     auto& output = candidate_scratch_;
     output.clear();
 
-    auto append_bucket = [&](std::size_t bucket_id, std::size_t target_size) {
+    auto append_bucket = [&](std::size_t bucket_id, std::size_t target_size,
+                             CandidateSource source) {
         if (output.size() >= target_size) return;
         const auto candidates = bounded_bucket_nodes(
             bucket_id, target_size - output.size());
         for (const NodeId id : candidates) {
-            (void)push_candidate(output, id, 0.0F);
+            if (push_candidate(output, id, 0.0F, source)) {
+                switch (source) {
+                case CandidateSource::ExactBucket:
+                    ++candidate_source_exact_bucket_;
+                    break;
+                case CandidateSource::ControlEdge:
+                    ++candidate_source_control_edge_;
+                    break;
+                case CandidateSource::NeighborBucket:
+                    ++candidate_source_neighbor_bucket_;
+                    break;
+                case CandidateSource::GpafRole:
+                    if (update_gpaf_state) ++gpaf_candidates_returned_;
+                    break;
+                }
+            }
         }
     };
 
@@ -51,7 +79,7 @@ SparseBranchMachine::candidate_ids(std::span<const std::uint64_t> signatures,
         if (!channel_enabled(channel)) continue;
         const std::size_t target_size = output.size() + config_.bucket_scan_limit;
         const std::size_t index = bucket_index(channel, signatures[channel]);
-        append_bucket(index, target_size);
+        append_bucket(index, target_size, CandidateSource::ExactBucket);
     }
 
     // Learned control-flow edges add alternatives after all exact views have
@@ -71,7 +99,64 @@ SparseBranchMachine::candidate_ids(std::span<const std::uint64_t> signatures,
             }
             const float prior = edge.weight /
                 (1.0F + std::max(0.0F, edge.weight));
-            (void)push_candidate(output, edge.dst, prior);
+            if (push_candidate(output, edge.dst, prior,
+                               CandidateSource::ControlEdge)) {
+                ++candidate_source_control_edge_;
+            }
+        }
+    }
+
+    if (config_.gpaf_candidate_retrieval && config_.gpaf_query_keys_per_step > 0U &&
+        config_.gpaf_residents_per_slot > 0U) {
+        std::uint32_t query_count = 0U;
+        for (const NodeId source : previous_route_) {
+            if (query_count >= config_.gpaf_query_keys_per_step ||
+                output.size() >= hard_limit) {
+                break;
+            }
+            const auto slot = slot_of(source);
+            if (slot == SIZE_MAX) continue;
+            const auto channel = channels_[slot];
+            const std::uint64_t structural_key =
+                gpaf_structural_call_key_for_channel(channel);
+            const bool has_dependency =
+                channel < topology_.size() &&
+                topology_[channel].dependency_channel != kInvalidChannel;
+            if (structural_key == 0U && has_dependency &&
+                topology_[channel].phase == ChannelPhase::Active) {
+                if (update_gpaf_state) ++gpaf_structural_call_blocked_;
+                continue;
+            }
+            const bool structural_call = structural_key != 0U;
+            const std::uint64_t key = structural_call
+                ? structural_key
+                : gpaf_role_key_for_channel(channel);
+            if (key == 0U) continue;
+            ++query_count;
+            if (update_gpaf_state) ++gpaf_slots_probed_;
+            const auto phase = gpaf_slot_phases_.find(key);
+            if (phase == gpaf_slot_phases_.end() ||
+                (phase->second != static_cast<std::uint8_t>(GpafSlotPhase::Probe) &&
+                 phase->second != static_cast<std::uint8_t>(GpafSlotPhase::Active))) {
+                continue;
+            }
+            const auto found = gpaf_residents_.find(key);
+            if (found == gpaf_residents_.end()) continue;
+            std::size_t returned = 0U;
+            for (const NodeId resident : found->second) {
+                if (returned >= config_.gpaf_residents_per_slot ||
+                    output.size() >= hard_limit) {
+                    break;
+                }
+                if (push_candidate(output, resident, 0.0F, CandidateSource::GpafRole,
+                                   key)) {
+                    if (update_gpaf_state) ++gpaf_candidates_returned_;
+                    if (update_gpaf_state && structural_call) {
+                        ++gpaf_structural_call_candidates_returned_;
+                    }
+                }
+                ++returned;
+            }
         }
     }
 
@@ -91,7 +176,8 @@ SparseBranchMachine::candidate_ids(std::span<const std::uint64_t> signatures,
                     static_cast<std::size_t>(channel) *
                     static_cast<std::size_t>(raw_bucket_count) +
                     static_cast<std::size_t>(probe);
-                append_bucket(flattened, hard_limit);
+                append_bucket(flattened, hard_limit,
+                              CandidateSource::NeighborBucket);
                 if (output.size() >= hard_limit) break;
             }
         }
@@ -125,8 +211,9 @@ double SparseBranchMachine::score(std::size_t slot,
 
 std::pair<std::span<SparseBranchMachine::ScoredNode>, std::uint32_t>
 SparseBranchMachine::select_route(std::span<const std::uint64_t> signatures,
-                                  std::int64_t max_radius) {
-    const auto candidates = candidate_ids(signatures, max_radius);
+                                  std::int64_t max_radius,
+                                  bool update_gpaf_state) {
+    const auto candidates = candidate_ids(signatures, max_radius, update_gpaf_state);
     auto& scored = scored_scratch_;
     scored.clear();
     for (const auto& candidate : candidates) {
@@ -134,8 +221,14 @@ SparseBranchMachine::select_route(std::span<const std::uint64_t> signatures,
         if (slot == SIZE_MAX) continue;
         const auto channel = channels_[slot];
         const bool exact = bucket(prototypes_[slot]) == bucket(signatures[channel]);
+        const double similarity = hamming_similarity(prototypes_[slot],
+                                                     signatures[channel]);
+        route_score_hamming_sum_ += similarity;
+        route_score_exact_sum_ += exact ? 1.0 : 0.0;
+        route_score_edge_prior_sum_ += static_cast<double>(candidate.edge_prior);
         scored.push_back({score(slot, signatures, candidate.edge_prior), candidate.id,
-                          0.0F, 0.0F, exact, channel});
+                          0.0F, 0.0F, exact, channel, candidate.source,
+                          candidate.gpaf_key});
     }
 
     auto& selected = selected_scratch_;

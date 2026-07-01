@@ -571,6 +571,21 @@ static TokenExperimentResult run_token_views(std::span<const TokenDataView> data
     std::array<double, kMaxAddressChannels> eval_channel_responsibility_sum{};
     double oracle_total = 0.0;
     std::uint64_t oracle_examples = 0U;
+    double gpaf_ablation_removed_cross_entropy_sum = 0.0;
+    double gpaf_ablation_gain_sum = 0.0;
+    double gpaf_ablation_false_positive_cost_sum = 0.0;
+    std::uint64_t gpaf_ablation_examples = 0U;
+    std::uint64_t gpaf_ablation_nodes = 0U;
+    std::uint8_t gpaf_ablation_key_count = 0U;
+    std::array<std::uint64_t, kMaxGpafAblationKeys> gpaf_ablation_keys{};
+    std::array<std::uint64_t, kMaxGpafAblationKeys> gpaf_ablation_key_examples{};
+    std::array<std::uint64_t, kMaxGpafAblationKeys> gpaf_ablation_key_nodes{};
+    std::array<double, kMaxGpafAblationKeys>
+        gpaf_ablation_key_removed_cross_entropy_sum{};
+    std::array<double, kMaxGpafAblationKeys> gpaf_ablation_key_gain_sum{};
+    std::array<double, kMaxGpafAblationKeys>
+        gpaf_ablation_key_false_positive_cost_sum{};
+    gpaf_ablation_keys.fill(UINT64_MAX);
 
     std::size_t example_index = 0U;
     double model_elapsed = 0.0;
@@ -607,6 +622,44 @@ static TokenExperimentResult run_token_views(std::span<const TokenDataView> data
             add_step(learn ? train_accumulator : eval_accumulator, stats);
 
             if (!learn) {
+                if (stats.gpaf_ablation_available) {
+                    gpaf_ablation_removed_cross_entropy_sum +=
+                        static_cast<double>(stats.gpaf_removed_cross_entropy);
+                    gpaf_ablation_gain_sum +=
+                        static_cast<double>(stats.gpaf_codelength_gain);
+                    gpaf_ablation_false_positive_cost_sum +=
+                        static_cast<double>(stats.gpaf_false_positive_cost);
+                    gpaf_ablation_nodes += stats.gpaf_ablation_nodes;
+                    for (std::size_t i = 0; i < stats.gpaf_ablation_key_count; ++i) {
+                        const auto key = stats.gpaf_ablation_keys[i];
+                        if (key == UINT64_MAX) continue;
+                        std::size_t key_index = SIZE_MAX;
+                        for (std::size_t j = 0; j < gpaf_ablation_key_count; ++j) {
+                            if (gpaf_ablation_keys[j] == key) {
+                                key_index = j;
+                                break;
+                            }
+                        }
+                        if (key_index == SIZE_MAX &&
+                            gpaf_ablation_key_count < kMaxGpafAblationKeys) {
+                            key_index = gpaf_ablation_key_count++;
+                            gpaf_ablation_keys[key_index] = key;
+                        }
+                        if (key_index == SIZE_MAX) continue;
+                        ++gpaf_ablation_key_examples[key_index];
+                        gpaf_ablation_key_nodes[key_index] +=
+                            stats.gpaf_ablation_key_nodes[i];
+                        gpaf_ablation_key_removed_cross_entropy_sum[key_index] +=
+                            static_cast<double>(
+                                stats.gpaf_ablation_key_removed_cross_entropy[i]);
+                        gpaf_ablation_key_gain_sum[key_index] +=
+                            static_cast<double>(stats.gpaf_ablation_key_gain[i]);
+                        gpaf_ablation_key_false_positive_cost_sum[key_index] +=
+                            static_cast<double>(
+                                stats.gpaf_ablation_key_false_positive_cost[i]);
+                    }
+                    ++gpaf_ablation_examples;
+                }
                 if (stats.channel_credit_count != 0U) {
                     const auto count = std::min<std::size_t>(
                         stats.channel_credit_count, eval_channel_attribution.size());
@@ -776,6 +829,31 @@ static TokenExperimentResult run_token_views(std::span<const TokenDataView> data
     result.excess_cross_entropy = oracle_examples == 0U
         ? std::numeric_limits<double>::quiet_NaN()
         : result.eval.cross_entropy - result.oracle_cross_entropy;
+    result.gpaf_ablation_examples = gpaf_ablation_examples;
+    result.gpaf_ablation_nodes = gpaf_ablation_nodes;
+    result.gpaf_ablation_key_count = gpaf_ablation_key_count;
+    result.gpaf_ablation_keys = gpaf_ablation_keys;
+    result.gpaf_ablation_key_examples = gpaf_ablation_key_examples;
+    result.gpaf_ablation_key_nodes = gpaf_ablation_key_nodes;
+    if (gpaf_ablation_examples != 0U) {
+        const double inverse = 1.0 / static_cast<double>(gpaf_ablation_examples);
+        result.gpaf_ablation_mean_removed_cross_entropy =
+            gpaf_ablation_removed_cross_entropy_sum * inverse;
+        result.gpaf_ablation_mean_gain = gpaf_ablation_gain_sum * inverse;
+        result.gpaf_ablation_false_positive_cost =
+            gpaf_ablation_false_positive_cost_sum;
+    }
+    for (std::size_t i = 0; i < gpaf_ablation_key_count; ++i) {
+        if (gpaf_ablation_key_examples[i] == 0U) continue;
+        const double inverse =
+            1.0 / static_cast<double>(gpaf_ablation_key_examples[i]);
+        result.gpaf_ablation_key_mean_removed_cross_entropy[i] =
+            gpaf_ablation_key_removed_cross_entropy_sum[i] * inverse;
+        result.gpaf_ablation_key_mean_gain[i] =
+            gpaf_ablation_key_gain_sum[i] * inverse;
+        result.gpaf_ablation_key_false_positive_cost[i] =
+            gpaf_ablation_key_false_positive_cost_sum[i];
+    }
     result.steps_per_second = static_cast<double>(total_examples) / elapsed;
     result.elapsed_seconds = elapsed;
     result.baseline_elapsed_seconds = baseline_elapsed;
@@ -1377,6 +1455,56 @@ std::string to_json(const TokenExperimentResult& result) {
         << "  \"edges\": " << result.diagnostics.edges << ",\n"
         << "  \"avg_active\": " << result.diagnostics.avg_active << ",\n"
         << "  \"avg_candidates\": " << result.diagnostics.avg_candidates << ",\n"
+        << "  \"candidate_source_exact_bucket\": "
+        << result.diagnostics.candidate_source_exact_bucket << ",\n"
+        << "  \"candidate_source_control_edge\": "
+        << result.diagnostics.candidate_source_control_edge << ",\n"
+        << "  \"candidate_source_neighbor_bucket\": "
+        << result.diagnostics.candidate_source_neighbor_bucket << ",\n"
+        << "  \"route_score_hamming_sum\": "
+        << result.diagnostics.route_score_hamming_sum << ",\n"
+        << "  \"route_score_exact_sum\": "
+        << result.diagnostics.route_score_exact_sum << ",\n"
+        << "  \"route_score_edge_prior_sum\": "
+        << result.diagnostics.route_score_edge_prior_sum << ",\n"
+        << "  \"gpaf_role_observations\": "
+        << result.diagnostics.gpaf_role_observations << ",\n"
+        << "  \"gpaf_unique_role_keys\": "
+        << result.diagnostics.gpaf_unique_role_keys << ",\n"
+        << "  \"gpaf_slots_allocated\": "
+        << result.diagnostics.gpaf_slots_allocated << ",\n"
+        << "  \"gpaf_probe_slots\": "
+        << result.diagnostics.gpaf_probe_slots << ",\n"
+        << "  \"gpaf_active_slots\": "
+        << result.diagnostics.gpaf_active_slots << ",\n"
+        << "  \"gpaf_quarantined_slots\": "
+        << result.diagnostics.gpaf_quarantined_slots << ",\n"
+        << "  \"gpaf_recoverable_retired_slots\": "
+        << result.diagnostics.gpaf_recoverable_retired_slots << ",\n"
+        << "  \"gpaf_physically_erased_slots\": "
+        << result.diagnostics.gpaf_physically_erased_slots << ",\n"
+        << "  \"gpaf_slot_promotions\": "
+        << result.diagnostics.gpaf_slot_promotions << ",\n"
+        << "  \"gpaf_slot_quarantines\": "
+        << result.diagnostics.gpaf_slot_quarantines << ",\n"
+        << "  \"gpaf_slot_recoverable_retires\": "
+        << result.diagnostics.gpaf_slot_recoverable_retires << ",\n"
+        << "  \"gpaf_slot_restores\": "
+        << result.diagnostics.gpaf_slot_restores << ",\n"
+        << "  \"gpaf_shadow_updates\": "
+        << result.diagnostics.gpaf_shadow_updates << ",\n"
+        << "  \"gpaf_slots_probed\": "
+        << result.diagnostics.gpaf_slots_probed << ",\n"
+        << "  \"gpaf_candidates_returned\": "
+        << result.diagnostics.gpaf_candidates_returned << ",\n"
+        << "  \"gpaf_structural_call_observations\": "
+        << result.diagnostics.gpaf_structural_call_observations << ",\n"
+        << "  \"gpaf_structural_call_keys\": "
+        << result.diagnostics.gpaf_structural_call_keys << ",\n"
+        << "  \"gpaf_structural_call_candidates_returned\": "
+        << result.diagnostics.gpaf_structural_call_candidates_returned << ",\n"
+        << "  \"gpaf_structural_call_blocked\": "
+        << result.diagnostics.gpaf_structural_call_blocked << ",\n"
         << "  \"created_total\": " << result.diagnostics.created_total << ",\n"
         << "  \"estimated_bytes\": " << result.diagnostics.estimated_bytes << ",\n"
         << "  \"address_index_bytes\": " << result.diagnostics.address_index_bytes << ",\n"
@@ -1485,6 +1613,34 @@ std::string to_json(const TokenExperimentResult& result) {
         out << "  \"oracle_cross_entropy\": null,\n"
             << "  \"excess_cross_entropy\": null,\n";
     }
+    out << "  \"gpaf_ablation_examples\": "
+        << result.gpaf_ablation_examples << ",\n"
+        << "  \"gpaf_ablation_nodes\": "
+        << result.gpaf_ablation_nodes << ",\n"
+        << "  \"gpaf_ablation_key_count\": "
+        << static_cast<std::uint32_t>(result.gpaf_ablation_key_count) << ",\n"
+        << "  \"gpaf_ablation_mean_removed_cross_entropy\": "
+        << result.gpaf_ablation_mean_removed_cross_entropy << ",\n"
+        << "  \"gpaf_ablation_mean_gain\": "
+        << result.gpaf_ablation_mean_gain << ",\n"
+        << "  \"gpaf_ablation_false_positive_cost\": "
+        << result.gpaf_ablation_false_positive_cost << ",\n";
+    out << "  \"gpaf_ablation_keys\": [";
+    for (std::size_t i = 0; i < result.gpaf_ablation_key_count; ++i) {
+        if (i != 0U) out << ", ";
+        out << "{"
+            << "\"key\": " << result.gpaf_ablation_keys[i]
+            << ", \"examples\": " << result.gpaf_ablation_key_examples[i]
+            << ", \"nodes\": " << result.gpaf_ablation_key_nodes[i]
+            << ", \"mean_removed_cross_entropy\": "
+            << result.gpaf_ablation_key_mean_removed_cross_entropy[i]
+            << ", \"mean_gain\": "
+            << result.gpaf_ablation_key_mean_gain[i]
+            << ", \"false_positive_cost\": "
+            << result.gpaf_ablation_key_false_positive_cost[i]
+            << "}";
+    }
+    out << "],\n";
     out << "  \"steps_per_second\": " << result.steps_per_second << ",\n"
         << "  \"elapsed_seconds\": " << result.elapsed_seconds << ",\n"
         << "  \"baseline_elapsed_seconds\": "
